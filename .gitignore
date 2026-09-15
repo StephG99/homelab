@@ -1,0 +1,45 @@
+# Environment files / secrets
+.env
+.env.*
+!.env.example
+
+# Private keys and certificates
+*.key
+*.pem
+*.p12
+*.pfx
+letsencrypt/
+certs/
+private/
+
+# SSH
+.ssh/
+id_rsa*
+id_ed25519*
+
+# Persistent application data
+data/
+db/
+database/
+nextcloud-data/
+
+# Monitoring runtime data
+prometheus-data/
+grafana-data/
+
+# Logs
+*.log
+logs/
+
+# Backups
+*.bak
+*.backup
+*.tar
+*.tar.gz
+*.zip
+
+# Editor / OS files
+.DS_Store
+.vscode/
+.idea/
+*~

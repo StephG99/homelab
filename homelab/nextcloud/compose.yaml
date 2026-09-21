@@ -1,0 +1,93 @@
+services:
+
+  db:
+    image: mariadb:lts
+    container_name: nextcloud-db
+    restart: unless-stopped
+
+    command:
+      - --transaction-isolation=READ-COMMITTED
+
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+
+      MARIADB_AUTO_UPGRADE: "1"
+      MARIADB_DISABLE_UPGRADE_BACKUP: "1"
+
+    volumes:
+      - nextcloud_db:/var/lib/mysql
+
+    networks:
+      - nextcloud_backend
+
+
+  redis:
+    image: redis:alpine
+    container_name: nextcloud-redis
+    restart: unless-stopped
+
+    networks:
+      - nextcloud_backend
+
+
+  app:
+    image: nextcloud:apache
+    container_name: nextcloud-app
+    restart: unless-stopped
+
+    depends_on:
+      - db
+      - redis
+
+    ports:
+      - "127.0.0.1:8082:80"
+
+    environment:
+      MYSQL_HOST: db
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+
+      REDIS_HOST: redis
+
+      NEXTCLOUD_TRUSTED_DOMAINS: cloud.stephen-homelab.com
+
+      OVERWRITEPROTOCOL: https
+      OVERWRITECLIURL: https://cloud.stephen-homelab.com
+
+    volumes:
+      - nextcloud_data:/var/www/html
+
+    networks:
+      - nextcloud_backend
+
+
+  cron:
+    image: nextcloud:apache
+    container_name: nextcloud-cron
+    restart: unless-stopped
+
+    entrypoint: /cron.sh
+
+    depends_on:
+      - db
+      - redis
+
+    volumes:
+      - nextcloud_data:/var/www/html
+
+    networks:
+      - nextcloud_backend
+
+
+volumes:
+  nextcloud_data:
+  nextcloud_db:
+
+
+networks:
+  nextcloud_backend:
+    driver: bridge

@@ -22,6 +22,7 @@ data/
 db/
 database/
 nextcloud-data/
+*nextcloud-dr/
 
 # Monitoring runtime data
 prometheus-data/
@@ -37,6 +38,12 @@ logs/
 *.tar
 *.tar.gz
 *.zip
+*.sql
+*.sql.gz
+*.dump
+
+
+
 
 # Editor / OS files
 .DS_Store

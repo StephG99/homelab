@@ -1,0 +1,10 @@
+[Unit]
+Description=Nextcloud backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/nextcloud-backup.sh
+User=root
+TimeoutStartSec=8h

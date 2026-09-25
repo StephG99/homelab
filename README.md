@@ -1,6 +1,6 @@
 # Homelab
 
-A self-hosted Linux homelab built on Ubuntu for learning Linux administration, networking, Docker, observability, reverse proxies, DNS, TLS, infrastructure security, and stateful application hosting.
+A self-hosted Linux homelab built on Ubuntu for learning Linux administration, networking, Docker, observability, reverse proxies, DNS, TLS, infrastructure security, stateful application hosting, backups, and disaster recovery.
 
 ## Architecture
 
@@ -27,6 +27,12 @@ flowchart TD
     NCData["Nextcloud Persistent Volume"]
     DBData["MariaDB Persistent Volume"]
 
+    BackupTimer["systemd Timer<br/>Daily Backup Schedule"]
+    BackupService["nextcloud-backup.service"]
+    BackupScript["nextcloud-backup.sh<br/>Maintenance Mode / Dump / Copy / Verify / Retention"]
+    LocalBackup["Local Backup Repository<br/>/home/stephen/backups/nextcloud"]
+    DR["Isolated DR Restore Test<br/>nextcloud-dr project<br/>127.0.0.1:18082"]
+
     Prometheus["Prometheus Container<br/>Docker Internal Network"]
     Cadvisor["cAdvisor Container<br/>Docker Internal Network"]
     NodeExporter["Node Exporter<br/>network_mode: host<br/>Port 9100"]
@@ -51,6 +57,13 @@ flowchart TD
     Nextcloud --> NCData
     Cron --> NCData
     MariaDB --> DBData
+
+    BackupTimer --> BackupService
+    BackupService --> BackupScript
+    BackupScript --> NCData
+    BackupScript --> DBData
+    BackupScript --> LocalBackup
+    LocalBackup -.->|"Restore validation"| DR
 
     Grafana -->|"Queries metrics<br/>prometheus:9090"| Prometheus
 
@@ -82,6 +95,16 @@ Nextcloud runs as a multi-container application using:
 - **Persistent Docker volumes** — Nextcloud and MariaDB data
 
 MariaDB and Redis are not published to the host and are only reachable through the private Docker network.
+
+The backup and recovery layer adds:
+
+- **`nextcloud-backup.sh`** — consistent backup workflow using maintenance mode, MariaDB logical dumps, filesystem copies, verification, logging, and retention
+- **`nextcloud-backup.service`** — `systemd` oneshot service that runs the backup script
+- **`nextcloud-backup.timer`** — daily scheduled execution
+- **Local timestamped backup repository** — stores Nextcloud data, database dumps, configuration, deployment files, Nginx configuration, and image metadata
+- **Isolated DR restore environment** — separate Docker Compose project used to prove that the backup can rebuild the service without modifying production
+
+The current backup repository resides on the ThinkPad itself. This protects against application/data corruption and destroyed Docker volumes, but not against complete physical loss of the ThinkPad. Off-host replication is a planned future improvement.
 
 The monitoring stack consists of:
 
@@ -129,20 +152,27 @@ homelab-repo/
 │       ├── compose.yaml
 │       └── .env.example
 │
-├── docs/
+├── systemd/
+│   ├── nextcloud-backup.service
+│   └── nextcloud-backup.timer
+│
+├── scripts/
+│   └── nextcloud-backup.sh
+│
+└── docs/
     ├── architecture.md
     ├── stage-01-linux-ssh.md
     ├── stage-02-nginx.md
     ├── stage-03-docker.md
     ├── stage-04-monitoring.md
     ├── stage-05-reverse-proxy-tls.md
-    └── stage-06-nextcloud.md
-
+    ├── stage-06-nextcloud.md
+    └── stage-07-backups-and-disaster-recovery.md
 ```
 
 The repository mirrors selected parts of the live ThinkPad configuration.
 
-Runtime data, credentials, `.env` files, private SSH keys, TLS private keys, certificates, database contents, Nextcloud user data, and other sensitive files are intentionally excluded.
+Runtime data, backup contents, credentials, `.env` files, private SSH keys, TLS private keys, certificates, database contents, Nextcloud user data, and other sensitive files are intentionally excluded.
 
 ## Completed Stages
 
@@ -210,6 +240,25 @@ Runtime data, credentials, `.env` files, private SSH keys, TLS private keys, cer
 - Enabled separate user accounts for personal, friends, and family access
 - Integrated the new containers into the existing cAdvisor / Prometheus / Grafana monitoring architecture
 
+### Stage 7 — Backups & Disaster Recovery
+
+- Created consistent Nextcloud backups using maintenance mode
+- Created logical MariaDB backups using `mariadb-dump`
+- Backed up Nextcloud data, configuration, custom apps, themes, Compose files, `.env`, Nginx configuration, and Docker image metadata
+- Added validation checks for the database dump, configuration, and data directory
+- Implemented a reusable backup script with `set -euo pipefail`
+- Added `trap`-based cleanup so failed backups do not leave Nextcloud in maintenance mode
+- Automated backups with a `systemd` oneshot service and daily timer
+- Added logging through both the script and `journald`
+- Implemented backup retention for recent successful backups
+- Created an isolated `nextcloud-dr` Docker Compose project for restore testing
+- Restored MariaDB, Nextcloud configuration, user data, apps, and themes into fresh DR volumes
+- Used a separate loopback port (`127.0.0.1:18082`) and SSH tunnel for safe DR access
+- Diagnosed a DR initialization issue caused by starting Nextcloud before restoring the application filesystem
+- Diagnosed a restored `503 Service Unavailable` as inherited Nextcloud maintenance mode rather than a networking failure
+- Successfully logged into the restored DR instance and verified the known `DR-Test.txt` recovery file
+- Confirmed that the backup set is sufficient to rebuild the stateful Nextcloud service
+
 ## Current Public Request Flow
 
 ```text
@@ -245,6 +294,34 @@ Native Nginx
           └── Persistent Storage
 ```
 
+## Backup and Recovery Flow
+
+```text
+Daily systemd timer
+        ↓
+nextcloud-backup.service
+        ↓
+nextcloud-backup.sh
+        ↓
+maintenance mode ON
+        ↓
+MariaDB dump + Nextcloud data/config backup
+        ↓
+backup verification
+        ↓
+maintenance mode OFF
+        ↓
+retention
+        ↓
+/home/stephen/backups/nextcloud/<timestamp>
+        ↓
+manual DR restore test
+        ↓
+nextcloud-dr isolated Compose project
+        ↓
+recovered Nextcloud instance
+```
+
 ## Security Model
 
 The homelab currently follows these principles:
@@ -260,6 +337,8 @@ The homelab currently follows these principles:
 - TLS terminates at native Nginx
 - Secrets and `.env` files are excluded from Git
 - TLS private keys are never committed or shared
+- Backup contents are excluded from Git and protected with restrictive filesystem permissions
+- Disaster-recovery testing uses separate Docker project names, volumes, and loopback ports to avoid modifying production
 
 ## Current Learning Progression
 
@@ -281,7 +360,12 @@ Reverse Proxy + DNS + NAT + TLS
         ↓
 Stage 6
 Nextcloud + MariaDB + Redis + Persistent Storage
+        ↓
+Stage 7
+Backups + systemd Automation + Restore Testing + Disaster Recovery
 ```
 
-Stage 6 introduced the first stateful production-style workload in the homelab. The next major operational step is implementing backups and restore testing for both Nextcloud data and MariaDB.
+Stage 7 moved the homelab from simply hosting a stateful service to operating and recovering it. The Nextcloud workload now has a tested backup-and-restore path, including MariaDB recovery, filesystem restoration, application-state troubleshooting, and isolated DR validation.
+
+The remaining resilience gap is off-host backup storage. A future stage can replicate backups to a second Linux machine or dedicated storage system so recovery is still possible after complete loss of the ThinkPad or its disk.
 

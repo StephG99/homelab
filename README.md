@@ -2,8 +2,8 @@
 
 A self-hosted Linux homelab built on Ubuntu for learning Linux administration, networking, Docker, observability, reverse proxies, DNS, TLS, infrastructure security, stateful application hosting, backups, and disaster recovery.
 
-## Architecture
 
+## Architecture
 ```mermaid
 flowchart TD
 
@@ -24,13 +24,13 @@ flowchart TD
     Redis["Redis Container<br/>Docker Internal Network"]
     Cron["Nextcloud Cron Container"]
 
-    NCData["Nextcloud Persistent Volume"]
-    DBData["MariaDB Persistent Volume"]
+    NCData["Nextcloud Persistent Volume<br/>Production Data"]
+    DBData["MariaDB Persistent Volume<br/>Production Database"]
 
     BackupTimer["systemd Timer<br/>Daily Backup Schedule"]
     BackupService["nextcloud-backup.service"]
     BackupScript["nextcloud-backup.sh<br/>Maintenance Mode / Dump / Copy / Verify / Retention"]
-    LocalBackup["Local Backup Repository<br/>/home/stephen/backups/nextcloud"]
+    LocalBackup["Local Backup Repository<br/>/home/stephen/backups/nextcloud<br/>Separate Filesystem Directory"]
     DR["Isolated DR Restore Test<br/>nextcloud-dr project<br/>127.0.0.1:18082"]
 
     Prometheus["Prometheus Container<br/>Docker Internal Network"]
@@ -60,10 +60,12 @@ flowchart TD
 
     BackupTimer --> BackupService
     BackupService --> BackupScript
-    BackupScript --> NCData
-    BackupScript --> DBData
-    BackupScript --> LocalBackup
-    LocalBackup -.->|"Restore validation"| DR
+
+    NCData -->|"Filesystem copy"| BackupScript
+    MariaDB -->|"mariadb-dump"| BackupScript
+    BackupScript -->|"Write timestamped backup"| LocalBackup
+
+    LocalBackup -.->|"Restore database, config and data"| DR
 
     Grafana -->|"Queries metrics<br/>prometheus:9090"| Prometheus
 
@@ -92,19 +94,64 @@ Nextcloud runs as a multi-container application using:
 - **MariaDB** — database and application metadata
 - **Redis** — caching and file locking
 - **Nextcloud Cron** — scheduled background processing
-- **Persistent Docker volumes** — Nextcloud and MariaDB data
+- **Persistent Docker volumes** — production Nextcloud and MariaDB state
 
 MariaDB and Redis are not published to the host and are only reachable through the private Docker network.
 
 The backup and recovery layer adds:
 
-- **`nextcloud-backup.sh`** — consistent backup workflow using maintenance mode, MariaDB logical dumps, filesystem copies, verification, logging, and retention
+- **`nextcloud-backup.sh`** — performs a consistent backup workflow using maintenance mode, a MariaDB logical dump, filesystem copies, verification, logging, and retention
 - **`nextcloud-backup.service`** — `systemd` oneshot service that runs the backup script
-- **`nextcloud-backup.timer`** — daily scheduled execution
-- **Local timestamped backup repository** — stores Nextcloud data, database dumps, configuration, deployment files, Nginx configuration, and image metadata
-- **Isolated DR restore environment** — separate Docker Compose project used to prove that the backup can rebuild the service without modifying production
+- **`nextcloud-backup.timer`** — triggers the backup service on a daily schedule
+- **Local timestamped backup repository** — stores copied Nextcloud data, MariaDB dumps, configuration, deployment files, Nginx configuration, and image metadata
+- **Isolated DR restore environment** — separate Docker Compose project used to verify that the saved backup can rebuild the service without modifying production
 
-The current backup repository resides on the ThinkPad itself. This protects against application/data corruption and destroyed Docker volumes, but not against complete physical loss of the ThinkPad. Off-host replication is a planned future improvement.
+The production Docker volumes and the local backup repository are logically separate:
+
+```text
+Production Nextcloud volume
+        |
+        | filesystem copy
+        v
+nextcloud-backup.sh
+        |
+        v
+/home/stephen/backups/nextcloud/<timestamp>/
+```
+
+For the database:
+
+```text
+MariaDB production volume
+        |
+        v
+MariaDB container
+        |
+        | mariadb-dump
+        v
+nextcloud-backup.sh
+        |
+        v
+nextcloud.sql
+```
+
+The backup repository therefore does **not** use the same Docker volumes as the production application. If a production Docker volume is deleted or corrupted, the timestamped backup remains available for restoration.
+
+However, the production volumes and the backup repository currently reside on the same physical ThinkPad storage. This means the current design protects against logical failures such as application corruption, accidental deletion, broken Docker volumes, or failed upgrades, but it does not protect against complete disk or hardware loss.
+
+A future off-host backup layer will provide physical separation:
+
+```text
+ThinkPad
+├── Production Docker volumes
+└── Local backup repository
+        |
+        | rsync / restic / borg
+        v
+Separate backup machine / NAS / external storage
+```
+
+The disaster-recovery test restores from the local backup repository into a separate Docker Compose project named `nextcloud-dr`. The DR environment uses independent Docker volumes and a separate loopback port (`127.0.0.1:18082`), so restore testing does not modify the production Nextcloud deployment.
 
 The monitoring stack consists of:
 

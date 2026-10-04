@@ -1,0 +1,71 @@
+// ============================================================
+// NGINX LOGS
+// ============================================================
+
+local.file_match "nginx" {
+  path_targets = [
+    {
+      __path__ = "/var/log/nginx/*.log",
+      job      = "nginx",
+      host     = "thinkpad",
+    },
+  ]
+
+  sync_period = "10s"
+}
+
+loki.source.file "nginx" {
+  targets    = local.file_match.nginx.targets
+  forward_to = [loki.write.local.receiver]
+}
+
+
+// ============================================================
+// DOCKER LOGS
+// ============================================================
+
+discovery.docker "docker" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "docker" {
+  targets = []
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service_name"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+}
+
+loki.source.docker "docker" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.docker.targets
+  labels        = {
+    job  = "docker",
+    host = "thinkpad",
+  }
+  relabel_rules = discovery.relabel.docker.rules
+  forward_to    = [loki.write.local.receiver]
+}
+
+
+// ============================================================
+// LOKI OUTPUT
+// ============================================================
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

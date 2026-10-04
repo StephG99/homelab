@@ -49,7 +49,29 @@ services:
     devices:
       - "/dev/kmsg"
 
+  loki:
+    image: grafana/loki:3.7.0
+    restart: unless-stopped
+    volumes:
+      - "./loki-config.yaml:/etc/loki/local-config.yaml:ro"
+      - "loki-data:/loki"
+
+    command: -config.file=/etc/loki/local-config.yaml
+
+  alloy:
+    image: grafana/alloy:v1.11.3
+    restart: unless-stopped
+    volumes:
+      - "./alloy/config.alloy:/etc/alloy/config.alloy:ro"
+      - "/var/log/nginx:/var/log/nginx:ro"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    command:
+      - run
+      - /etc/alloy/config.alloy
+    depends_on:
+      - loki
+
 volumes:
   prometheus-data:
   grafana-data:
-
+  loki-data:
